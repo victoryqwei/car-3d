@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Car Sim</title>
+		<link rel="stylesheet" type="text/css" href="default.css">
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+		
+	</head>
+
+	<body>
+		<div id="info" class="centered">
+			<a href="http://threejs.org" target="_blank" rel="noopener">three.js</a> car simulation by <a href="victorwei.com" target="_blank" rel="noopener">Victor Wei</a>
+			 | Ferrari 458 Italia model by <a href="https://sketchfab.com/models/57bf6cc56931426e87494f554df1dab6" target="_blank" rel="noopener">vicent091036</a>
+		</div>
+
+		<div id="navigation-left">
+			<div id="settings-container">
+				<label class="container">Settings <input type="checkbox" id="settings-toggle" class="checkbox" checked><span class="checkmark"></span></label>
+				<div id="settings">
+					<label>Body: <select id="body-mat"></select></label>
+					<label>Details: <select id="rim-mat"></select></label>
+					<label>Glass: <select id="glass-mat"></select></label>
+					<br>
+					<label>Camera: <select id="camera-type"></select></label>
+					<br>
+					<label>View angle: <input type="range" id="view-slider" class="slider" value="50" onclick="this.blur()"></label>
+					<br>
+					<label class="container">Use mouse to steer: <input type="checkbox" id="mouse-toggle" class="checkbox" onclick="this.blur()"><span class="checkmark"></span></label>
+					<br>
+					<label>Volume: <input type="range" id="volume-slider" class="slider" value="0" onclick="this.blur()"></label>
+					<br>
+					<label class="container">Auto gear shift: <input type="checkbox" id="gear-toggle" class="checkbox" onclick="this.blur()" checked><span class="checkmark"></span></label>
+					<br>
+					<label class="container">Show dashboard: <input type="checkbox" id="dashboard-toggle" class="checkbox" onclick="this.blur()" checked><span class="checkmark"></span></label>
+				</div>
+			</div>
+		</div>
+
+		<div id="navigation-right">
+			<div id="stats-container">
+				<label class="container">Stats <input type="checkbox" id="stats-toggle" class="checkbox" onclick="this.blur()" checked><span class="checkmark"></span></label>
+				<div id="stats" ></div>
+			</div>
+		</div>
+
+		<div id="dashboard">
+			<canvas id="canvas" width="100" height="100"></canvas>
+		</div>
+
+		<div id="container"></div>
+
+		<audio src="audio/engine.wav"></audio>
+
+		<script src="javascripts/jquery.js"></script>
+		<script src="javascripts/vector.js"></script>
+		<script src="javascripts/howler.js"></script>
+		<script src="javascripts/graph.js"></script>
+		<script src="javascripts/helper.js"></script>
+		<script src="javascripts/input.js"></script>
+		<script src="javascripts/speedometer.js"></script>
+		<script src="javascripts/perlin3d.js"></script>
+
+		<script>
+			var car;
+
+			// Set up car parts & materials
+			var bodyMatSelect = document.getElementById( 'body-mat' );
+			var rimMatSelect = document.getElementById( 'rim-mat' );
+			var glassMatSelect = document.getElementById( 'glass-mat' );
+			var cameraType = document.getElementById( 'camera-type' );
+			var gearSelect = document.getElementById('gear-toggle');
+			var useMouse = document.getElementById('mouse-toggle');
+			var volumeSlider = document.getElementById('volume-slider');
+			var showDashboard = document.getElementById('dashboard-toggle');
+			var viewAngle = document.getElementById('view-slider');
+
+			$("#settings-toggle").change(function (e) {
+				if (e.target.checked) {
+					$("#settings").show();
+				} else {
+					$("#settings").hide();
+				}
+			})
+
+			$("#stats-toggle").change(function (e) {
+				if (e.target.checked) {
+					$("#stats").show();
+				} else {
+					$("#stats").hide();
+				}
+			})
+
+			$("select").change(function () {
+				this.blur();
+			})
+
+			// Perlin noise
+			noise.seed(Math.random());
+		</script>
+
+		<script type="module">
+
+			import * as THREE from './build/three.module.js';
+			import { OrbitControls } from './build/orbitcontrols.module.js';
+			import { PointerLockControls } from './build/pointerlock.module.js';
+
+			import Stats from './jsm/libs/stats.module.js';
+
+			import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+			import { DRACOLoader } from './jsm/loaders/DRACOLoader.js';
+
+			import { Car } from './jsm/misc/Car.js';
+
+			import { PMREMGenerator } from './jsm/pmrem/PMREMGenerator.js';
+			import { PMREMCubeUVPacker } from './jsm/pmrem/PMREMCubeUVPacker.js';
+
+			import { ImprovedNoise } from './jsm/math/ImprovedNoise.js';
+
+			var camera, scene, renderer, stats, carModel, materialsLib, envMap;
+
+			
+
+			var clock = new THREE.Clock();
+			car = new Car();
+
+			var carParts = {
+				body: [],
+				rims: [],
+				glass: [],
+			};
+
+			var carStats = [];
+
+			// Follow Car Camera
+			var followDistance = 5;
+			var damping = 10.0;
+			var cameraTarget = new THREE.Vector3();
+
+			// Orbit controls
+			var controls;
+
+			// Terrain
+			var mesh, texture;
+
+			var worldWidth = 256, worldDepth = 256,
+				worldHalfWidth = worldWidth / 2, worldHalfDepth = worldDepth / 2;
+
+			function init() {
+
+				var container = document.getElementById( 'container' );
+
+				var fov = 50;
+				camera = new THREE.PerspectiveCamera( fov, window.innerWidth / window.innerHeight, 0.1, 200 );
+				
+
+				scene = new THREE.Scene();
+				//scene.fog = new THREE.Fog( 0xd7cbb1, 1, 80 );
+
+				// Load skybox
+				var urls = [ 'px.jpg', 'nx.jpg', 'py.jpg', 'ny.jpg', 'pz.jpg', 'nz.jpg' ];
+				var loader = new THREE.CubeTextureLoader().setPath( './textures/cube/skyboxsun25deg/' );
+				loader.load( urls, function ( texture ) {
+
+					scene.background = texture;
+
+					var pmremGenerator = new PMREMGenerator( texture );
+					pmremGenerator.update( renderer );
+
+					var pmremCubeUVPacker = new PMREMCubeUVPacker( pmremGenerator.cubeLods );
+					pmremCubeUVPacker.update( renderer );
+
+					envMap = pmremCubeUVPacker.CubeUVRenderTarget.texture;
+
+					pmremGenerator.dispose();
+					pmremCubeUVPacker.dispose();
+
+					//
+
+					initCar();
+					initMaterials();
+					initMaterialSelectionMenus();
+					initSettingsMenu();
+
+				} );
+
+				// Initialize ground
+				var ground = new THREE.Mesh(
+					new THREE.PlaneBufferGeometry( 10000, 10000 ),
+					new THREE.ShadowMaterial( { color: 0x000000, opacity: 0.15, depthWrite: false }
+					) );
+				ground.rotation.x = - Math.PI / 2;
+				ground.receiveShadow = true;
+				ground.renderOrder = 1;
+				scene.add( ground );
+
+				// Initialize grid
+				var grid = new THREE.GridHelper( 40000, 8000, 0x000000, 0x000000 );
+				grid.material.opacity = 0.2;
+				grid.material.depthWrite = false;
+				grid.material.transparent = true;
+				scene.add( grid );
+
+				// Initialize terrain
+
+				var data = generateHeight( worldWidth, worldDepth );
+
+				var geometry = new THREE.PlaneBufferGeometry( 7500, 7500, worldWidth - 1, worldDepth - 1 );
+				geometry.rotateX( - Math.PI / 2 );
+
+				var vertices = geometry.attributes.position.array;
+
+				for ( var i = 0, j = 0, l = vertices.length; i < l; i ++, j += 3 ) {
+
+					vertices[ j + 1 ] = data[ i ] * 10;
+
+				}
+
+				var texture = new THREE.CanvasTexture( generateTexture( data, worldWidth, worldDepth ) );
+				texture.wrapS = THREE.ClampToEdgeWrapping;
+				texture.wrapT = THREE.ClampToEdgeWrapping;
+
+				var mesh = new THREE.Mesh( geometry, new THREE.MeshBasicMaterial( { map: texture } ) );
+				mesh.position.y -= 256;
+				//scene.add( mesh );
+
+				// Renderer
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.gammaOutput = true;
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				container.appendChild( renderer.domElement );
+				
+
+				// Top-Left stats
+				stats = new Stats();
+				container.appendChild( stats.dom );
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				renderer.setAnimationLoop( function () {
+
+					update();
+
+					renderer.render( scene, camera );
+
+				} );
+
+			}
+
+			function initCar() {
+
+				DRACOLoader.setDecoderPath( './js/libs/draco/gltf/' );
+
+				var loader = new GLTFLoader();
+				loader.setDRACOLoader( new DRACOLoader() );
+
+				loader.load( './models/gltf/ferrari.glb', function ( gltf ) {
+
+					carModel = gltf.scene.children[ 0 ];
+
+					car.setModel( carModel );
+
+					carModel.traverse( function ( child ) {
+
+						if ( child.isMesh ) {
+
+							child.material.envMap = envMap;
+
+						}
+
+					} );
+
+					// shadow
+					var texture = new THREE.TextureLoader().load( './models/gltf/ferrari_ao.png' );
+					var shadow = new THREE.Mesh(
+						new THREE.PlaneBufferGeometry( 0.655 * 4, 1.3 * 4 ).rotateX( - Math.PI / 2 ),
+						new THREE.MeshBasicMaterial( { map: texture, opacity: 0.8, transparent: true } )
+					);
+					shadow.renderOrder = 2;
+					carModel.add( shadow );
+
+					scene.add( carModel );
+
+					// car parts for material selection
+					carParts.body.push( carModel.getObjectByName( 'body' ) );
+
+					carParts.rims.push(
+						carModel.getObjectByName( 'rim_fl' ),
+						carModel.getObjectByName( 'rim_fr' ),
+						carModel.getObjectByName( 'rim_rr' ),
+						carModel.getObjectByName( 'rim_rl' ),
+						carModel.getObjectByName( 'trim' ),
+					);
+
+					carParts.glass.push(
+						carModel.getObjectByName( 'glass' ),
+					);
+
+					updateMaterials();
+
+				} );
+
+			}
+
+			function initMaterials() {
+
+				materialsLib = {
+
+					main: [
+
+						new THREE.MeshStandardMaterial( { color: 0xff4400, envMap: envMap, metalness: 0.9, roughness: 0.2, name: 'orange' } ),
+						new THREE.MeshStandardMaterial( { color: 0x001166, envMap: envMap, metalness: 0.9, roughness: 0.2, name: 'blue' } ),
+						new THREE.MeshStandardMaterial( { color: 0x990000, envMap: envMap, metalness: 0.9, roughness: 0.2, name: 'red' } ),
+						new THREE.MeshStandardMaterial( { color: 0x000000, envMap: envMap, metalness: 0.9, roughness: 0.5, name: 'black' } ),
+						new THREE.MeshStandardMaterial( { color: 0xffffff, envMap: envMap, metalness: 0.9, roughness: 0.5, name: 'white' } ),
+						new THREE.MeshStandardMaterial( { color: 0x555555, envMap: envMap, envMapIntensity: 2.0, metalness: 1.0, roughness: 0.2, name: 'metallic' } ),
+
+					],
+
+					glass: [
+
+						new THREE.MeshStandardMaterial( { color: 0xffffff, envMap: envMap, metalness: 1, roughness: 0, opacity: 0.2, transparent: true, premultipliedAlpha: true, name: 'clear' } ),
+						new THREE.MeshStandardMaterial( { color: 0x000000, envMap: envMap, metalness: 1, roughness: 0, opacity: 0.2, transparent: true, premultipliedAlpha: true, name: 'smoked' } ),
+						new THREE.MeshStandardMaterial( { color: 0x001133, envMap: envMap, metalness: 1, roughness: 0, opacity: 0.2, transparent: true, premultipliedAlpha: true, name: 'blue' } ),
+
+					],
+
+				};
+
+			}
+
+			function addOption( name, menu, value, selected ) {
+
+				var option = document.createElement( 'option' );
+				option.text = name;
+				option.value = value || name;
+				if (selected)
+					option.selected = "selected";
+				menu.add( option );
+
+			}
+
+			function initSettingsMenu() {
+				addOption( "Driver Seat", cameraType, 1 );
+				addOption( "Follow Car", cameraType, 2 );
+				addOption( "Fixed Distance", cameraType, 3, true );
+				addOption( "No movement", cameraType, 4, false );
+			}
+
+
+			function initMaterialSelectionMenus() {
+
+				materialsLib.main.forEach( function ( material ) {
+
+					addOption( material.name, bodyMatSelect );
+					addOption( material.name, rimMatSelect );
+
+				} );
+
+				materialsLib.glass.forEach( function ( material ) {
+
+					addOption( material.name, glassMatSelect );
+
+				} );
+
+				bodyMatSelect.selectedIndex = 3;
+				rimMatSelect.selectedIndex = 5;
+				glassMatSelect.selectedIndex = 0;
+
+				bodyMatSelect.addEventListener( 'change', updateMaterials );
+				rimMatSelect.addEventListener( 'change', updateMaterials );
+				glassMatSelect.addEventListener( 'change', updateMaterials );
+
+			}
+
+			// set materials to the current values of the selection menus
+			function updateMaterials() {
+
+				var bodyMat = materialsLib.main[ bodyMatSelect.selectedIndex ];
+				var rimMat = materialsLib.main[ rimMatSelect.selectedIndex ];
+				var glassMat = materialsLib.glass[ glassMatSelect.selectedIndex ];
+
+				carParts.body.forEach( part => part.material = bodyMat );
+				carParts.rims.forEach( part => part.material = rimMat );
+				carParts.glass.forEach( part => part.material = glassMat );
+
+			}
+
+			// Perlin noise
+
+			function generateHeight( width, height ) {
+
+				var size = width * height, data = new Uint8Array( size ),
+					perlin = new ImprovedNoise(), quality = 1, z = Math.random() * 100;
+
+				for ( var j = 0; j < 4; j ++ ) {
+
+					for ( var i = 0; i < size; i ++ ) {
+
+						var x = i % width, y = ~ ~ ( i / width );
+						data[ i ] += Math.abs( perlin.noise( x / quality, y / quality, z ) * quality * 1.75 );
+
+					}
+
+					quality *= 5;
+
+				}
+
+				return data;
+
+			}
+
+			// Generate perlin noise texture
+
+			function generateTexture( data, width, height ) {
+
+				var canvas, canvasScaled, context, image, imageData, vector3, sun, shade;
+
+				vector3 = new THREE.Vector3( 0, 0, 0 );
+
+				sun = new THREE.Vector3( 1, 1, 1 );
+				sun.normalize();
+
+				canvas = document.createElement( 'canvas' );
+				canvas.width = width;
+				canvas.height = height;
+
+				context = canvas.getContext( '2d' );
+				context.fillStyle = '#000';
+				context.fillRect( 0, 0, width, height );
+
+				image = context.getImageData( 0, 0, canvas.width, canvas.height );
+				imageData = image.data;
+
+				for ( var i = 0, j = 0, l = imageData.length; i < l; i += 4, j ++ ) {
+
+					vector3.x = data[ j - 2 ] - data[ j + 2 ];
+					vector3.y = 2;
+					vector3.z = data[ j - width * 2 ] - data[ j + width * 2 ];
+					vector3.normalize();
+
+					shade = vector3.dot( sun );
+
+					imageData[ i ] = ( 96 + shade * 128 ) * ( 0.5 + data[ j ] * 0.007 );
+					imageData[ i + 1 ] = ( 32 + shade * 96 ) * ( 0.5 + data[ j ] * 0.007 );
+					imageData[ i + 2 ] = ( shade * 96 ) * ( 0.5 + data[ j ] * 0.007 );
+
+				}
+
+				context.putImageData( image, 0, 0 );
+
+				// Scaled 4x
+
+				canvasScaled = document.createElement( 'canvas' );
+				canvasScaled.width = width * 4;
+				canvasScaled.height = height * 4;
+
+				context = canvasScaled.getContext( '2d' );
+				context.scale( 4, 4 );
+				context.drawImage( canvas, 0, 0 );
+
+				image = context.getImageData( 0, 0, canvasScaled.width, canvasScaled.height );
+				imageData = image.data;
+
+				for ( var i = 0, l = imageData.length; i < l; i += 4 ) {
+
+					var v = ~ ~ ( Math.random() * 5 );
+
+					imageData[ i ] += v;
+					imageData[ i + 1 ] += v;
+					imageData[ i + 2 ] += v;
+
+				}
+
+				context.putImageData( image, 0, 0 );
+
+				return canvasScaled;
+
+			}
+
+			function addStat(name, value, decimalPlace, averageArray, maxCount) {
+				let displayValue = value;
+				if (averageArray) {
+					averageArray.push(value);
+					if (averageArray.length > (maxCount || 30))
+						averageArray.shift();
+					displayValue = averageArray.reduce((a, b) => a + b, 0)/averageArray.length;
+				}
+
+				$("#stats").append('<label>' + name + ': ' + round(displayValue, decimalPlace) + '</label><br>')
+			}
+
+			var carSpeed = [];
+
+			function updateCarStats() {
+				$("#stats").empty();
+				addStat("KM / Hr", car.speed, 2, carSpeed);
+				addStat("Miles / Hr", car.imperialSpeed, 2);
+				addStat("Orientation", car.carAngle%(Math.PI*2), 2);
+				addStat("G force", car.localAcceleration.getMag()/car.gravity, 2);
+
+				if (car.root) {
+					addStat("X", car.root.position.x, 2);
+					addStat("Z", car.root.position.z, 2);
+				}
+
+				addStat("Gear", car.gear);
+				addStat("RPM", car.rpm, 2);
+				addStat("Wheel RPM", car.wheelRPM, 2);
+
+				addStat("Wheel RR", car.wheelRotationRate, 2);
+				addStat("Engine Torque", car.engineTorque, 2);
+				addStat("Drive Force", car.driveForce, 2);
+
+				addStat("Throttle", car.throttle, 2);
+				addStat("Distance (km)", car.distanceTraveled, 3);
+				addStat("Distance (miles)", car.distanceTraveled*0.621371, 3);
+
+				addStat("Front Weight", car.axleWeightFront, 1);
+				addStat("Rear Weight", car.axleWeightRear, 1);
+
+				addStat("Front Left", car.frontL, 1);
+				addStat("Front Right", car.frontR, 1);
+				addStat("Rear Left", car.rearL, 1);
+				addStat("Rear Right", car.rearR, 1);
+
+				addStat("Body Roll", car.bodyRoll, 2);
+				addStat("Camber Angle", car.camberAngle, 2);
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function update() {
+
+				var delta = clock.getDelta();
+
+				if ( carModel ) {
+
+					car.update( delta );
+
+					if ( cameraType.value == 1) { // Driver seat
+
+						carModel.getWorldPosition( cameraTarget );
+
+						var seatView = new Vector(0.3, 0.3);
+
+						seatView = Vector.rotate(seatView, car.carAngle);
+
+						var cameraDistance = 10;
+						var cameraPos = new THREE.Vector3(cameraTarget.x - seatView.x, cameraTarget.y + 1, cameraTarget.z + seatView.y);
+
+						camera.position.set( cameraPos.x, cameraPos.y, cameraPos.z );
+
+						camera.lookAt( cameraTarget.x - Math.sin(car.carAngle+rad(50-viewAngle.value))*cameraDistance,  cameraTarget.y + 1,  cameraTarget.z - Math.cos(car.carAngle+rad(50-viewAngle.value))*cameraDistance );
+
+					} else if ( cameraType.value == 2 ) { // Follow car
+
+						carModel.getWorldPosition( cameraTarget );
+						cameraTarget.x += Math.sin(car.carAngle+rad((viewAngle.value-50)/50*90))*followDistance;
+						cameraTarget.y = 2;
+						cameraTarget.z += Math.cos(car.carAngle+rad((viewAngle.value-50)/50*90))*followDistance;
+
+						camera.position.lerp( cameraTarget, delta * damping );
+
+						camera.lookAt( carModel.position );
+
+					} else if ( cameraType.value == 3 ) { // Fixed distance
+
+						carModel.getWorldPosition( cameraTarget );
+						cameraTarget.x += Math.sin(car.carAngle+rad((viewAngle.value-50)/50*90))*followDistance;
+						cameraTarget.y = 2.5;
+						cameraTarget.z += Math.cos(car.carAngle+rad((viewAngle.value-50)/50*90))*followDistance;
+
+						camera.position.set(cameraTarget.x, cameraTarget.y, cameraTarget.z);
+
+						camera.lookAt( carModel.position );
+
+					}
+
+				}
+
+				stats.update();
+
+				updateCarStats();
+
+				// Dashboard
+				ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+				if (showDashboard.checked)
+					drawSpeedometer();
+
+			}
+
+			init();
+
+		</script>
+
+	</body>
+</html>
